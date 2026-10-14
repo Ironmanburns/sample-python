@@ -18,12 +18,18 @@ export GITHUB_APP_INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-}"
 export GITHUB_APP_OWNER="${GITHUB_APP_OWNER:-Ironmanburns}"
 export GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
 
-# Normalize PEM for Python (secrets often store literal \n).
+# Normalize PEM for Python (secrets often store literal \n, or whole-PEM base64).
 export GITHUB_APP_PRIVATE_KEY="$(printf '%s' "$GITHUB_APP_PRIVATE_KEY" | sed 's/\\n/\n/g')"
 
 if ! printf '%s' "$GITHUB_APP_PRIVATE_KEY" | grep -q 'BEGIN.*PRIVATE KEY'; then
-  echo "GITHUB_APP_PRIVATE_KEY does not look like a PEM private key" >&2
-  exit 1
+  # Some secret managers store the PEM as a single-line base64 blob.
+  decoded="$(printf '%s' "$GITHUB_APP_PRIVATE_KEY" | base64 -d 2>/dev/null || true)"
+  if printf '%s' "$decoded" | grep -q 'BEGIN.*PRIVATE KEY'; then
+    export GITHUB_APP_PRIVATE_KEY="$(printf '%s' "$decoded" | sed 's/\\n/\n/g')"
+  else
+    echo "GITHUB_APP_PRIVATE_KEY does not look like a PEM private key" >&2
+    exit 1
+  fi
 fi
 
 python3 - <<'PY'

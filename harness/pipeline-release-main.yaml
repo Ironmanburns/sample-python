@@ -14,7 +14,7 @@ pipeline:
     ci:
       codebase:
         connectorRef: github_sample_apps
-        repoName: Ironmanburns/sample-python
+        repoName: sample-python
         build: <+input>
         depth: 0
   stages:
@@ -59,11 +59,12 @@ pipeline:
                     connectorRef: dockerhub_public
                     image: alpine:3.20
                     shell: Sh
-                    # Mint a short-lived GitHub App installation token, then tag.
+                    # Prefer GitHub App mint; fall back to legacy PAT if PEM secret is bad.
                     # Live pipelines are managed by terraform/sample-apps (embeds mint script).
                     envVariables:
                       GITHUB_APP_ID: <+secrets.getValue("github_release_app_id")>
                       GITHUB_APP_PRIVATE_KEY: <+secrets.getValue("github_release_app_private_key")>
+                      GITHUB_RELEASE_TOKEN_FALLBACK: <+secrets.getValue("github_release_token")>
                       GITHUB_APP_OWNER: Ironmanburns
                       GITHUB_REPOSITORY: Ironmanburns/sample-python
                       RELEASE_BRANCH: main
@@ -72,7 +73,17 @@ pipeline:
                       set -e
                       apk add --no-cache git bash python3 openssl curl >/dev/null
                       chmod +x scripts/mint-github-app-token.sh scripts/harness-semver-release.sh
-                      export GITHUB_TOKEN="$(bash scripts/mint-github-app-token.sh)"
+                      if GITHUB_TOKEN="$(bash scripts/mint-github-app-token.sh 2>/tmp/mint.err)"; then
+                        echo "Using GitHub App installation token"
+                      elif [ -n "${GITHUB_RELEASE_TOKEN_FALLBACK:-}" ]; then
+                        echo "WARN: App mint failed ($(cat /tmp/mint.err | tr '\n' ' ')); falling back to github_release_token" >&2
+                        GITHUB_TOKEN="$GITHUB_RELEASE_TOKEN_FALLBACK"
+                      else
+                        echo "ERROR: App mint failed and no github_release_token fallback" >&2
+                        cat /tmp/mint.err >&2 || true
+                        exit 1
+                      fi
+                      export GITHUB_TOKEN
                       test -n "$GITHUB_TOKEN"
                       bash scripts/harness-semver-release.sh
         failureStrategies:

@@ -1,4 +1,6 @@
-# PR preview — build + ephemeral Helm release (does not affect stable).
+# PR preview — build + ephemeral Helm release (must NOT touch stable samples ns).
+# Deploys to samples-pr-sample-python-<pr> with host sample-python-pr-<n>.burnsy.me.
+# Teardown deletes that namespace (see pipeline-pr-teardown.yaml).
 pipeline:
   name: PR Preview sample-python
   identifier: PR_Preview_sample_python
@@ -11,7 +13,7 @@ pipeline:
     ci:
       codebase:
         connectorRef: github_sample_apps
-        repoName: Ironmanburns/sample-python
+        repoName: sample-python
         build: <+input>
   variables:
     - name: imageRepo
@@ -20,6 +22,12 @@ pipeline:
     - name: imageTag
       type: String
       value: pr-<+trigger.prNumber>
+    - name: previewNamespace
+      type: String
+      value: samples-pr-sample-python-<+trigger.prNumber>
+    - name: previewHost
+      type: String
+      value: sample-python-pr-<+trigger.prNumber>.burnsy.me
   stages:
     - stage:
         name: Build
@@ -65,31 +73,56 @@ pipeline:
     - stage:
         name: Preview
         identifier: Preview
-        type: Deployment
+        description: Helm install into PR-isolated namespace (not samples / python-sample.burnsy.me)
+        type: Custom
         when:
           pipelineStatus: Success
         spec:
-          deploymentType: NativeHelm
-          service:
-            serviceRef: sample_python
-          environment:
-            environmentRef: local_kind
-            deployToAll: false
-            infrastructureDefinitions:
-              - identifier: kind_infra_samples
           execution:
             steps:
               - step:
-                  name: Helm Preview
-                  identifier: Helm_Preview
-                  type: HelmDeploy
+                  type: ShellScript
+                  name: Helm Preview Isolated
+                  identifier: Helm_Preview_Isolated
                   timeout: 10m
                   spec:
-                    skipDryRun: false
-                    # Target namespace samples-pr-sample-python-<pr> via service/infra overrides in Harness UI/TF
+                    shell: Bash
+                    source:
+                      type: Inline
+                      spec:
+                        script: |-
+                          set -euo pipefail
+                          NS="<+pipeline.variables.previewNamespace>"
+                          HOST="<+pipeline.variables.previewHost>"
+                          TAG="<+pipeline.variables.imageTag>"
+                          REPO="<+pipeline.variables.imageRepo>"
+                          COMMIT="<+codebase.commitSha>"
+                          echo "Preview ns=${NS} host=${HOST} tag=${TAG} commit=${COMMIT}"
+                          case "$NS" in
+                            samples-pr-sample-python-*) ;;
+                            *)
+                              echo "Refusing preview deploy outside samples-pr-sample-python-* (got ${NS})"
+                              exit 1
+                              ;;
+                          esac
+                          WORK="$(mktemp -d)"
+                          git clone --depth 50 https://github.com/Ironmanburns/sample-python.git "$WORK/repo"
+                          git -C "$WORK/repo" fetch --depth 50 origin "$COMMIT"
+                          git -C "$WORK/repo" checkout "$COMMIT"
+                          kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f -
+                          helm upgrade --install sample-python "$WORK/repo/charts/sample-python" \
+                            --namespace "${NS}" \
+                            --set "image.repository=localhost:5001/${REPO}" \
+                            --set "image.tag=${TAG}" \
+                            --set "ingress.host=${HOST}" \
+                            --wait --timeout 5m
+                          rm -rf "$WORK"
+                    onDelegate: true
+                    delegateSelectors:
+                      - local-kind
         failureStrategies:
           - onFailure:
               errors:
                 - AllErrors
               action:
-                type: StageRollback
+                type: Abort
