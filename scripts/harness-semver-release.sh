@@ -23,8 +23,19 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
-git config user.name "$GIT_USER_NAME"
-git config user.email "$GIT_USER_EMAIL"
+# Prefer repo-local config when already inside a clone; otherwise set global
+# (Harness Run steps sometimes start outside /harness).
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git config user.name "$GIT_USER_NAME"
+  git config user.email "$GIT_USER_EMAIL"
+else
+  git config --global user.name "$GIT_USER_NAME"
+  git config --global user.email "$GIT_USER_EMAIL"
+  if [ -d /harness/.git ]; then
+    git config --global --add safe.directory /harness
+    cd /harness
+  fi
+fi
 
 # Best-effort fetch (Harness workspace is already cloned; local dry-runs may have no creds).
 git fetch --tags --force origin "$RELEASE_BRANCH" 2>/dev/null || git fetch --tags --force origin 2>/dev/null || true
