@@ -72,6 +72,9 @@ pipeline:
                     command: |-
                       set -e
                       apk add --no-cache git bash python3 openssl curl >/dev/null
+                      # Harness clones codebase to /harness; Run step cwd is not always that.
+                      cd /harness
+                      git config --global --add safe.directory /harness
                       chmod +x scripts/mint-github-app-token.sh scripts/harness-semver-release.sh
                       if GITHUB_TOKEN="$(bash scripts/mint-github-app-token.sh 2>/tmp/mint.err)"; then
                         echo "Using GitHub App installation token"
